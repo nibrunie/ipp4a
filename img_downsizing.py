@@ -65,8 +65,8 @@ class OffloadInputBuffer(OffloadBuffer):
     OffloadBuffer.__init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype)
 
 class OffloadOutputBuffer(OffloadBuffer):
-  def __init__(self, cl_ctx, cl_queue, nbytes, dtype = np.uint8):
-    buffer = cl.Buffer(cl_ctx, mf.WRITE_ONLY, nbytes)
+  def __init__(self, cl_ctx, cl_queue, nbytes, dtype = np.uint8, flags = mf.WRITE_ONLY):
+    buffer = cl.Buffer(cl_ctx, mf.READ_WRITE, nbytes)
     OffloadBuffer.__init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype)
 
   def get_raw_data(self, shape):
@@ -100,6 +100,7 @@ input_path = sys.argv[1]
 
 image_raw = RawData.build_from_raw_file(input_path)
 img_downsize = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/downsize.cl")
+img_threshold = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/threshold.cl")
 
 w,h,d = image_raw.get_shape()
 print("w={}, h={}, d={}\n".format(w, h, d))
@@ -114,13 +115,18 @@ type_size = np.dtype(np.uint8).itemsize
 # rgb_b = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf = rgb_lin)
 image_buffer = OffloadInputBuffer(ctx, queue, image_raw)
 
+tmp_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
+
 out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size)
 
 
 
-res_g = cl.Buffer(ctx, mf.WRITE_ONLY, out_w * out_h * d * type_size)
-img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
-
+# res_g = cl.Buffer(ctx, mf.WRITE_ONLY, out_w * out_h * d * type_size)
+print("downsizing image")
+img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
+print("threshold simplification")
+img_threshold.get_cl_prg().threshold(queue, (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
+print("post-processing")
 output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
 
 #res_np = np.empty(out_w*out_h*d, dtype=np.uint8)
