@@ -101,6 +101,7 @@ input_path = sys.argv[1]
 image_raw = RawData.build_from_raw_file(input_path)
 img_downsize = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/downsize.cl")
 img_threshold = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/threshold.cl")
+img_poidetection = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/poidetection.cl")
 
 w,h,d = image_raw.get_shape()
 print("w={}, h={}, d={}\n".format(w, h, d))
@@ -117,7 +118,7 @@ image_buffer = OffloadInputBuffer(ctx, queue, image_raw)
 
 tmp_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
 
-out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size)
+out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf-READ_WRITE)
 
 
 
@@ -126,8 +127,43 @@ print("downsizing image")
 img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
 print("threshold simplification")
 img_threshold.get_cl_prg().threshold(queue, (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
+
+poi_part_nx = 16
+poi_part_ny = 16
+poi_part_w = out_w / poi_part_nx
+poi_part_h = out_h / poi_part_ny
+obj_per_part = 5
+
+object_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.int16) * 2, flags = mf.READ_WRITE)
+barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32) * 3, dtype = np.float32, flags = mf.READ_WRITE)
+poi_buffer = OffloadOutputBuffer(ctx, queue, obj_per_part * poi_part_nx * poi_part_ny * 3 * nd.dtype(np.float32).itemsiwe, dtype = np.float32)
+
+img_poidetection.get_cl_prg().poidetection(
+  queue, 
+  (poi_part_nx, poi_part_ny), 
+  None, 
+  out_buffer.get_buffer(), 
+  object_buffer.get_buffer(), 
+  barycenter_buffer.get_buffer(), 
+  poi_buffer.get_buffer(), 
+  np.int32(out_w), 
+  np.int32(out_h), 
+  np.int32(poi_part_w), 
+  np.int32(poi_part_h), 
+  np.int32(200), 
+  np.int32(obj_per_part)
+)
+
+
 print("post-processing")
 output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
+
+# there are 3 float for each results data
+poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 3,))
+for i in xrange(poi_part_nx * poi_part_ny):
+  obj_x, obj_y, obj_w = poi_data[i * 3], poi_data[i * 3 + 1], poi_data[i * 3 + 2]
+  if obj_w > 0.0;
+    print("object at {},{} with weight {}".format(obj_x, obj_y, obj_w))
 
 #res_np = np.empty(out_w*out_h*d, dtype=np.uint8)
 #cl.enqueue_copy(queue, res_np, res_g)
