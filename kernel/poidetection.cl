@@ -22,37 +22,38 @@
  *
  */           
 
-float3 get_barycenter(float3 p0, float3 p1)
+float4 get_barycenter(float4 p0, float4 p1)
 {
-  float3 v;
-  float w0 = p0.s2, w1 = p1.s2;
+  float4 v;
+  float w0 = p0.z, w1 = p1.z;
   v.x = (w0 * p0.x + w1 * p1.x) / (w0 + w1);
   v.y = (w0 * p0.y + w1 * p1.y) / (w0 + w1);
-  v.s2 = w0 + w1;
+  v.z = w0 + w1;
 
   return v;
 }
 
 short2 get_pixel_object(__global short2*object, int x, int y, int h) {
   short2 tag = object[x * h + y];
-  while ((tag.x != x || tag.y != y) && (tag.x >= 0) && (tag.y >= 0)) {
-    x = tag.x; 
-    y = tag.y;
-    tag = object[x * h + y];
+  int ox = x, oy = y;
+  while ((tag.x != ox || tag.y != oy) && (tag.x >= 0) && (tag.y >= 0)) {
+    ox = tag.x; 
+    oy = tag.y;
+    tag = object[ox * h + oy];
   }
   return tag;
 }
 
-void set_pixel_object(__global short2* object, int x, int y, int w, short2 tag)
+void set_pixel_object(__global short2* object, int x, int y, int h, short2 tag)
 {
-  object[x * w + y] = tag;
+  object[x * h + y] = tag;
 }
 
 __kernel void poidetection(
-  __global const unsigned char* img, 
+  __global unsigned char* img, 
   __global short2* object, 
-  __global float3* barycenter, 
-  __global float3* results, 
+  __global float4* barycenter, 
+  __global float4* results, 
   const int w, const int h, 
   const int sub_w, const int sub_h, 
   const int threshold, const int obj_per_partition)
@@ -68,65 +69,30 @@ __kernel void poidetection(
   
   int x, y;
 
-  {
-    /** partition start index*/
-    int pid = (work_id_x * 16 + work_id_y) * obj_per_partition;
-    /** cancelling unused objects */
-    for (int oid = 0; oid < obj_per_partition; ++oid) {
-      results[pid + oid].s2 = -1.0f;
-    }
-    return;
-  }
-
   /** start_obj is the line object initial coords */
   for (y = start_y; y < start_y + sub_h; ++y)
   {
-    int start_obj = -1;
+    short2 start_tag = (short2)(-1, -1);
     for (x = start_x; x < start_x + sub_w; ++x)
     {
       unsigned char red   = img[x * dim_x + y * dim_y + 0]; 
       unsigned char green = img[x * dim_x + y * dim_y + 1]; 
       unsigned char blue  = img[x * dim_x + y * dim_y + 2]; 
 
+
       if (red >= threshold || green >= threshold || blue >= threshold) {
-        if (start_obj < 0) {
+        if (start_tag.x < 0) {
           // starting a new object
-          start_obj = x;
-        } else {
-          //last_obj = x;
-        }
+          start_tag = (short2) (x, y);
+          barycenter[start_tag.x * h + y].y = y;
+        } 
+        object[x * h + y] = start_tag;
+        barycenter[start_tag.x * h + y].x = (x + start_tag.x) * 0.5;
+        barycenter[start_tag.x * h + y].z = x - start_tag.x + 1.0;
       } else {
-        object[x * h + y] = (short2)(-1);
-        // colors did not exceed threshold
-        if (start_obj >= 0) {
-          // this is the first pixel after a contiguous object
-          // going from start_x to (x-1)
-          int ox;
-          short2 pixel_obj = (short2)(-1);
-          pixel_obj.x = start_obj;
-          pixel_obj.y = y;
-          for (ox = start_obj; ox < x; ++ox) {
-            object[ox * h + y] = pixel_obj;
-          }
-          barycenter[start_obj * h + y].x = (x + start_obj) / 2.0;
-          barycenter[start_obj * h + y].y = (float) y;
-          barycenter[start_obj * h + y].s2 = x - start_obj;
-        }
-        start_obj = -1;
+        start_tag = (short2) (-1, -1);
+        object[x * h + y] = start_tag;
       }
-    }
-    /** object ending line */
-    if (start_obj >= 0) {
-      int ox;
-      short2 pixel_obj = (short2)(-1);
-      pixel_obj.x = start_obj;
-      pixel_obj.y = y;
-      for (ox = start_obj; ox < x; ++ox) {
-        object[ox * h + y] = pixel_obj;
-      }
-      barycenter[start_obj * h + y].x = (x + start_obj) / 2.0;
-      barycenter[start_obj * h + y].y = (float) y;
-      barycenter[start_obj * h + y].s2 = x - start_obj;
     }
   }
 
@@ -139,60 +105,36 @@ __kernel void poidetection(
       unsigned char red   = img[x * dim_x + y * dim_y + 0]; 
       unsigned char green = img[x * dim_x + y * dim_y + 1]; 
       unsigned char blue  = img[x * dim_x + y * dim_y + 2]; 
-
+      short2 common_obj;
+      float4 new_barycenter;
       if (red >= threshold || green >= threshold || blue >= threshold) {
         if (start_obj < 0) {
           // starting a new object
           start_obj = y;
+          common_obj = get_pixel_object(object, x, y, h);
+          new_barycenter = barycenter[common_obj.x * h + common_obj.y];
         } else {
-          //last_obj = x;
+          short2 pixel_obj = get_pixel_object(object, x, y, h);
+          if (pixel_obj.x != common_obj.x || pixel_obj.y != common_obj.y) {
+            new_barycenter = get_barycenter(new_barycenter, barycenter[pixel_obj.x * h + pixel_obj.y]);
+            set_pixel_object(object, pixel_obj.x, pixel_obj.y, h, common_obj);
+            barycenter[common_obj.x * h + common_obj.y] = new_barycenter;
+          }
         }
       } else {
         // colors did not exceed threshold
-        if (start_obj >= 0) 
-        {
-          // this is the first pixel after a contiguous object
-          // going from start_x to (x-1)
-          int oy;
-          /** */
-          short2 common_obj = get_pixel_object(object, x, start_obj, h);
-          float3 new_barycenter = barycenter[x * h + start_obj];
-          for (oy = start_obj; oy < y; ++oy) {
-            short2 pixel_obj = get_pixel_object(object, x, oy, h);
-            if (pixel_obj.x != common_obj.x || pixel_obj.y != common_obj.y) {
-              new_barycenter = get_barycenter(new_barycenter, barycenter[x * h + oy]);
-              set_pixel_object(object, pixel_obj.x, pixel_obj.y, h, common_obj);
-            }
-          }
-          barycenter[common_obj.x * h + common_obj.y] = new_barycenter;
-        }
-        start_obj = -1;
+        if (start_obj >= 0) start_obj = -1; 
       }
-    }
-    /** object ending line */
-    if (start_obj >= 0) {
-      // this is the first pixel after a contiguous object
-      // going from start_obj to (y-1)
-      int oy;
-      /** */
-      short2 common_obj = get_pixel_object(object, x, start_y, h);
-      float3 new_barycenter = barycenter[x * h + start_obj];
-      for (oy = start_obj; oy < y; ++oy) {
-        short2 pixel_obj = get_pixel_object(object, x, oy, h);
-        if (pixel_obj.x != common_obj.x || pixel_obj.y != common_obj.y) {
-          new_barycenter = get_barycenter(new_barycenter, barycenter[x * h + oy]);
-          set_pixel_object(object, pixel_obj.x, pixel_obj.y, h, common_obj);
-        }
-      }
-      barycenter[common_obj.x * h + common_obj.y] = new_barycenter;
     }
   }
 
+
+
   /** partition start index*/
-  int pid = (work_id_x * 16 + work_id_y) * obj_per_partition;
+  int pid = (work_id_x * get_global_size(1) + work_id_y) * obj_per_partition;
   /** cancelling unused objects */
   for (int oid = 0; oid < obj_per_partition; ++oid) {
-    results[pid + oid].s2 = -1.0f;
+    results[pid + oid].z = -1.0f;
   }
   /** object id */
   int oid = 0;
@@ -200,9 +142,21 @@ __kernel void poidetection(
     for (int oy = start_y; oy < start_y + sub_h && oid < obj_per_partition; ++oy)
     {
       short2 pixel_obj = get_pixel_object(object, ox, oy, h);
-      if (pixel_obj.x == ox && pixel_obj.y == y) {
+      if (pixel_obj.x == ox && pixel_obj.y == oy) {
         results[pid + oid] = barycenter[ox * h + oy];
         oid++;
+        short bx = barycenter[ox * h + oy].x;
+        short by = barycenter[ox * h + oy].y;
+        for (int i = bx - 10; i < bx + 10; ++i) { 
+          img[i *dim_x + by * dim_y + 2] = 255;
+          img[i *dim_x + by * dim_y + 0] = 0;
+          img[i *dim_x + by * dim_y + 1] = 0;
+        }
+        for (int j = by - 10; j < by + 10; ++j) {
+          img[bx *dim_x + j * dim_y + 2] = 255;
+          img[bx *dim_x + j * dim_y + 0] = 0;
+          img[bx *dim_x + j * dim_y + 1] = 0;
+        }
       }
     }
   }

@@ -131,27 +131,22 @@ img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get
 print("threshold simplification")
 img_threshold.get_cl_prg().threshold(queue, (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
 
-print("post-processing")
-output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
-print("final rendering")
-imageio.imsave("sample.jpg", output_rawdata.get_md_array())
-
 
 poi_part_nx = 16
 poi_part_ny = 16
 poi_part_w = out_w / poi_part_nx
 poi_part_h = out_h / poi_part_ny
 obj_per_part = 5
-poi_size = obj_per_part * poi_part_nx * poi_part_ny * 3 * np.dtype(np.float32).itemsize
+poi_size = obj_per_part * poi_part_nx * poi_part_ny * 4 * np.dtype(np.float32).itemsize
 print("poi_size= {}".format(poi_size))
 
 object_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
-barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32).itemsize * 3, dtype = np.float32, flags = mf.READ_WRITE)
+barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
 poi_buffer = OffloadOutputBuffer(ctx, queue, poi_size, dtype = np.float32)
 
 print("point of interest detection")
 print("{} x {} -> {} x {}".format(out_w, out_h, poi_part_w, poi_part_h))
-img_poidetection.get_cl_prg().poidetection(
+completeEvent = img_poidetection.get_cl_prg().poidetection(
   queue, 
   (poi_part_nx, poi_part_ny), 
   None, 
@@ -168,14 +163,22 @@ img_poidetection.get_cl_prg().poidetection(
 )
 
 
+completeEvent.wait()
 
-if 0:
+print("post-processing")
+output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
+print("final rendering")
+imageio.imsave("sample.png", output_rawdata.get_md_array())
+
+
+
+if 1:
   # there are 3 float for each results data
-  poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 3,))
+  poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 4,))
   print("poi_data.shape {}".format(poi_data.md_array.shape))
   for i in xrange(poi_part_nx * poi_part_ny * obj_per_part):
-    obj_x, obj_y, obj_w = poi_data[i * 3], poi_data[i * 3 + 1], poi_data[i * 3 + 2]
-    if obj_w >= 1.0:
+    obj_x, obj_y, obj_w = poi_data[i * 4], poi_data[i * 4 + 1], poi_data[i * 4 + 2]
+    if obj_w > 1.0:
       print("object at {},{} with weight {}".format(obj_x, obj_y, obj_w))
 
 
