@@ -19,6 +19,9 @@ class RawData(object):
     self.md_array = md_array
     self.dtype = dtype
 
+  def __getitem__(self, id):
+    return self.md_array[id]
+
   def get_shape(self):
     return self.md_array.shape
   def get_dtype(self):
@@ -66,7 +69,7 @@ class OffloadInputBuffer(OffloadBuffer):
 
 class OffloadOutputBuffer(OffloadBuffer):
   def __init__(self, cl_ctx, cl_queue, nbytes, dtype = np.uint8, flags = mf.WRITE_ONLY):
-    buffer = cl.Buffer(cl_ctx, mf.READ_WRITE, nbytes)
+    buffer = cl.Buffer(cl_ctx, flags, nbytes)
     OffloadBuffer.__init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype)
 
   def get_raw_data(self, shape):
@@ -118,7 +121,7 @@ image_buffer = OffloadInputBuffer(ctx, queue, image_raw)
 
 tmp_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
 
-out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf-READ_WRITE)
+out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
 
 
 
@@ -128,16 +131,26 @@ img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get
 print("threshold simplification")
 img_threshold.get_cl_prg().threshold(queue, (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
 
+print("post-processing")
+output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
+print("final rendering")
+imageio.imsave("sample.jpg", output_rawdata.get_md_array())
+
+
 poi_part_nx = 16
 poi_part_ny = 16
 poi_part_w = out_w / poi_part_nx
 poi_part_h = out_h / poi_part_ny
 obj_per_part = 5
+poi_size = obj_per_part * poi_part_nx * poi_part_ny * 3 * np.dtype(np.float32).itemsize
+print("poi_size= {}".format(poi_size))
 
-object_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.int16) * 2, flags = mf.READ_WRITE)
-barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32) * 3, dtype = np.float32, flags = mf.READ_WRITE)
-poi_buffer = OffloadOutputBuffer(ctx, queue, obj_per_part * poi_part_nx * poi_part_ny * 3 * nd.dtype(np.float32).itemsiwe, dtype = np.float32)
+object_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
+barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32).itemsize * 3, dtype = np.float32, flags = mf.READ_WRITE)
+poi_buffer = OffloadOutputBuffer(ctx, queue, poi_size, dtype = np.float32)
 
+print("point of interest detection")
+print("{} x {} -> {} x {}".format(out_w, out_h, poi_part_w, poi_part_h))
 img_poidetection.get_cl_prg().poidetection(
   queue, 
   (poi_part_nx, poi_part_ny), 
@@ -155,20 +168,14 @@ img_poidetection.get_cl_prg().poidetection(
 )
 
 
-print("post-processing")
-output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
 
-# there are 3 float for each results data
-poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 3,))
-for i in xrange(poi_part_nx * poi_part_ny):
-  obj_x, obj_y, obj_w = poi_data[i * 3], poi_data[i * 3 + 1], poi_data[i * 3 + 2]
-  if obj_w > 0.0;
-    print("object at {},{} with weight {}".format(obj_x, obj_y, obj_w))
+if 0:
+  # there are 3 float for each results data
+  poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 3,))
+  print("poi_data.shape {}".format(poi_data.md_array.shape))
+  for i in xrange(poi_part_nx * poi_part_ny * obj_per_part):
+    obj_x, obj_y, obj_w = poi_data[i * 3], poi_data[i * 3 + 1], poi_data[i * 3 + 2]
+    if obj_w >= 1.0:
+      print("object at {},{} with weight {}".format(obj_x, obj_y, obj_w))
 
-#res_np = np.empty(out_w*out_h*d, dtype=np.uint8)
-#cl.enqueue_copy(queue, res_np, res_g)
-#res_np = res_np.reshape((out_w, out_h, 3))
-#print(res_np)
-#print(res_np.shape)
-imageio.imsave("sample.jpg", output_rawdata.get_md_array())
 
