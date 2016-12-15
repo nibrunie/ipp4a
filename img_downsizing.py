@@ -10,9 +10,25 @@ import rawpy
 import imageio
 import sys
 
-ctx = cl.create_some_context()
-queue = cl.CommandQueue(ctx)
 mf = cl.mem_flags
+
+# Singleton/static class to contain
+# OpenCL context and queue variable
+class CLContext:
+  ctx = None
+  queue = None
+  @staticmethod
+  def get_context_queue():
+    return CLContext.ctx, CLContext.queue
+  @staticmethod
+  def get_context():
+    return CLContext.ctx
+  @staticmethod
+  def get_queue():
+    return CLContext.queue
+
+CLContext.ctx = cl.create_some_context()
+CLContext.queue = cl.CommandQueue(CLContext.ctx)
 
 class RawData(object):
   def __init__(self, md_array, dtype = np.uint8):
@@ -34,7 +50,8 @@ class RawData(object):
   def get_md_array(self):
     return self.md_array
 
-  def get_cl_buffer_lin(self, cl_ctx, cl_queue, flags = mf.READ_ONLY | mf.COPY_HOST_PTR):
+  def get_cl_buffer_lin(self, flags = mf.READ_ONLY | mf.COPY_HOST_PTR):
+    cl_ctx, cl_queue = CLContext.get_context_queue()
     return cl.Buffer(ctx, flags, host_buf = self.get_lin_array())
 
   @staticmethod
@@ -47,7 +64,8 @@ class RawData(object):
     return RawData(rgb)
   
 class OffloadBuffer(object):
-  def __init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype = np.uint8):
+  def __init__(self, buffer, nbytes, dtype = np.uint8):
+    cl_ctx, cl_queue = CLContext.get_context_queue()
     self.nbytes = nbytes
     self.buffer = buffer
     self.dtype = dtype
@@ -60,17 +78,19 @@ class OffloadBuffer(object):
 
 
 class OffloadInputBuffer(OffloadBuffer):
-  def __init__(self, cl_ctx, cl_queue, raw_data):
+  def __init__(self, raw_data):
+    cl_ctx, cl_queue = CLContext.get_context_queue()
     dtype = raw_data.get_dtype()
     lin_data = raw_data.get_lin_array()
     nbytes = lin_data.shape[0] * np.dtype(dtype).itemsize
     buffer = cl.Buffer(cl_ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf = lin_data)
-    OffloadBuffer.__init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype)
+    OffloadBuffer.__init__(self, buffer, nbytes, dtype)
 
 class OffloadOutputBuffer(OffloadBuffer):
-  def __init__(self, cl_ctx, cl_queue, nbytes, dtype = np.uint8, flags = mf.WRITE_ONLY):
+  def __init__(self, nbytes, dtype = np.uint8, flags = mf.WRITE_ONLY):
+    cl_ctx, cl_queue = CLContext.get_context_queue()
     buffer = cl.Buffer(cl_ctx, flags, nbytes)
-    OffloadBuffer.__init__(self, cl_ctx, cl_queue, buffer, nbytes, dtype)
+    OffloadBuffer.__init__(self, buffer, nbytes, dtype)
 
   def get_raw_data(self, shape):
     array = np.empty(self.nbytes / np.dtype(self.dtype).itemsize, dtype = self.dtype)
@@ -79,7 +99,8 @@ class OffloadOutputBuffer(OffloadBuffer):
 
 
 class OffloadProcess(object):
-  def __init__(self, cl_ctx, cl_queue, cl_prg):
+  def __init__(self, cl_prg):
+    cl_ctx, cl_queue = CLContext.get_context_queue()
     self.cl_ctx = cl_ctx
     self.cl_queue = cl_queue
     self.cl_prg = cl_prg
@@ -88,23 +109,38 @@ class OffloadProcess(object):
     return self.cl_prg
 
   @staticmethod
-  def create_from_kernel_src(cl_ctx, cl_queue, kernel_src):
+  def create_from_kernel_src(kernel_src):
+    cl_ctx = CLContext.get_context()
     kernel_prg = cl.Program(cl_ctx, kernel_src).build()
-    return OffloadProcess(cl_ctx, cl_queue, kernel_prg)
+    return OffloadProcess(kernel_prg)
 
   @staticmethod
-  def create_from_kernel_filename(cl_ctx, cl_queue, kernel_filename):
+  def create_from_kernel_filename(kernel_filename):
     kernel_src = open(kernel_filename, "r").read()
-    return OffloadProcess.create_from_kernel_src(cl_ctx, cl_queue, kernel_src)
+    return OffloadProcess.create_from_kernel_src(kernel_src)
 
+class ImageFrame:
+  def __init__(self, raw_data):
+    self.raw_data = raw_data
+
+  def get_shape(self):
+    return self.raw_data.get_shape()
+
+  @staticmethod
+  def buildFromFile(self, filename):
+    return ImageFrame(RawData.build_from_raw_file(filename))
+
+  def resize(self, out_w, out_h):
+    #img_buffer = OffloadInputBuffer(cl_ctx, queue
+    pass
 
 
 input_path = sys.argv[1]
 
 image_raw = RawData.build_from_raw_file(input_path)
-img_downsize = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/downsize.cl")
-img_threshold = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/threshold.cl")
-img_poidetection = OffloadProcess.create_from_kernel_filename(ctx, queue, "kernel/poidetection.cl")
+img_downsize     = OffloadProcess.create_from_kernel_filename("kernel/downsize.cl")
+img_threshold    = OffloadProcess.create_from_kernel_filename("kernel/threshold.cl")
+img_poidetection = OffloadProcess.create_from_kernel_filename("kernel/poidetection.cl")
 
 w,h,d = image_raw.get_shape()
 print("w={}, h={}, d={}\n".format(w, h, d))
@@ -117,19 +153,19 @@ type_size = np.dtype(np.uint8).itemsize
 
 
 # rgb_b = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf = rgb_lin)
-image_buffer = OffloadInputBuffer(ctx, queue, image_raw)
+image_buffer = OffloadInputBuffer(image_raw)
 
-tmp_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
+tmp_buffer = OffloadOutputBuffer(out_w * out_h * d * type_size, flags = mf.READ_WRITE)
 
-out_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * d * type_size, flags = mf.READ_WRITE)
+out_buffer = OffloadOutputBuffer(out_w * out_h * d * type_size, flags = mf.READ_WRITE)
 
 
 
 # res_g = cl.Buffer(ctx, mf.WRITE_ONLY, out_w * out_h * d * type_size)
 print("downsizing image")
-img_downsize.get_cl_prg().mysample(queue, (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
+img_downsize.get_cl_prg().mysample(CLContext.get_queue(), (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
 print("threshold simplification")
-img_threshold.get_cl_prg().threshold(queue, (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
+img_threshold.get_cl_prg().threshold(CLContext.get_queue(), (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
 
 
 poi_part_nx = 16
@@ -140,14 +176,14 @@ obj_per_part = 5
 poi_size = obj_per_part * poi_part_nx * poi_part_ny * 4 * np.dtype(np.float32).itemsize
 print("poi_size= {}".format(poi_size))
 
-object_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
-barycenter_buffer = OffloadOutputBuffer(ctx, queue, out_w * out_h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
-poi_buffer = OffloadOutputBuffer(ctx, queue, poi_size, dtype = np.float32)
+object_buffer = OffloadOutputBuffer(out_w * out_h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
+barycenter_buffer = OffloadOutputBuffer(out_w * out_h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
+poi_buffer = OffloadOutputBuffer(poi_size, dtype = np.float32)
 
 print("point of interest detection")
 print("{} x {} -> {} x {}".format(out_w, out_h, poi_part_w, poi_part_h))
 completeEvent = img_poidetection.get_cl_prg().poidetection(
-  queue, 
+  CLContext.get_queue(), 
   (poi_part_nx, poi_part_ny), 
   None, 
   out_buffer.get_buffer(), 
