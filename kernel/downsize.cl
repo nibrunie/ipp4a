@@ -2,7 +2,7 @@
  *  to the output image @p out of size global_size.x x global_size.y
  *  Each work item processes a sub-buffer of size @p sub_w x @p sub_h
  */
-__kernel void mysample(__global const unsigned char* img, __global unsigned char* out, const int w, const int h, const int sub_w, const int sub_h)
+__kernel void downsize(__global const unsigned char* img, __global unsigned char* out, const int w, const int h, const int sub_w, const int sub_h)
 {
   const int depth = 3;
   const int dim_x = depth * h, dim_y = depth;

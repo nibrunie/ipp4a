@@ -130,9 +130,27 @@ class ImageFrame:
   def buildFromFile(self, filename):
     return ImageFrame(RawData.build_from_raw_file(filename))
 
-  def resize(self, out_w, out_h):
-    #img_buffer = OffloadInputBuffer(cl_ctx, queue
-    pass
+  def resize(self, div_w, div_h):
+    w, h, d = self.get_shape()
+    out_w = w / div_w
+    out_h = w / div_h
+    out_buffer_size = out_w * out_h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img_buffer = OffloadInputBuffer(self.raw_data)
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_downsize = KernelLib.getOffloadProcess("kernel.downsize")
+    kernel_downsize.get_cl_prg().downsize(
+      CLContext.get_queue(),
+      (out_w, out_h),
+      Non,
+      img_buffer.get_buffer(),
+      out_buffer.get_buffer(),
+      np.int32(w),
+      np.int32(h),
+      np.int32(div_w),
+      np.int32(div_h)
+    )
+    return ImageFrame(out_buffer.get_raw_data((out_w, out_h, d)))
 
 
 input_path = sys.argv[1]
@@ -163,7 +181,7 @@ out_buffer = OffloadOutputBuffer(out_w * out_h * d * type_size, flags = mf.READ_
 
 # res_g = cl.Buffer(ctx, mf.WRITE_ONLY, out_w * out_h * d * type_size)
 print("downsizing image")
-img_downsize.get_cl_prg().mysample(CLContext.get_queue(), (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
+img_downsize.get_cl_prg().downsize(CLContext.get_queue(), (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
 print("threshold simplification")
 img_threshold.get_cl_prg().threshold(CLContext.get_queue(), (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
 
