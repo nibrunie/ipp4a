@@ -99,6 +99,13 @@ class OffloadOutputBuffer(OffloadBuffer):
 
 
 class OffloadProcess(object):
+  kernel_map = {}
+  @staticmethod
+  def getOffloadProcess(filename):
+    if not filename in OffloadProcess.kernel_map:
+      OffloadProcess.kernel_map[filename] = OffloadProcess.create_from_kernel_filename(filename)
+    return OffloadProcess.kernel_map[filename]
+
   def __init__(self, cl_prg):
     cl_ctx, cl_queue = CLContext.get_context_queue()
     self.cl_ctx = cl_ctx
@@ -127,22 +134,23 @@ class ImageFrame:
     return self.raw_data.get_shape()
 
   @staticmethod
-  def buildFromFile(self, filename):
+  def buildFromFile(filename):
     return ImageFrame(RawData.build_from_raw_file(filename))
 
   def resize(self, div_w, div_h):
     w, h, d = self.get_shape()
     out_w = w / div_w
-    out_h = w / div_h
+    out_h = h / div_h
     out_buffer_size = out_w * out_h * d * np.dtype(self.raw_data.dtype).itemsize 
 
     img_buffer = OffloadInputBuffer(self.raw_data)
     out_buffer = OffloadOutputBuffer(out_buffer_size)
-    kernel_downsize = KernelLib.getOffloadProcess("kernel.downsize")
+    kernel_downsize = OffloadProcess.getOffloadProcess("kernel/downsize.cl")
+
     kernel_downsize.get_cl_prg().downsize(
       CLContext.get_queue(),
       (out_w, out_h),
-      Non,
+      None,
       img_buffer.get_buffer(),
       out_buffer.get_buffer(),
       np.int32(w),
@@ -152,87 +160,90 @@ class ImageFrame:
     )
     return ImageFrame(out_buffer.get_raw_data((out_w, out_h, d)))
 
+  def threshold(self, threshold = 100):
+    w, h, d = self.get_shape()
+    out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img_buffer = OffloadInputBuffer(self.raw_data)
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_threshold = OffloadProcess.getOffloadProcess("kernel/threshold.cl")
+
+    kernel_threshold.get_cl_prg().threshold(
+      CLContext.get_queue(), 
+      (w, h), 
+      None, 
+      img_buffer.get_buffer(), 
+      out_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(1), 
+      np.int32(1), 
+      np.int32(threshold)
+    )
+    return ImageFrame(out_buffer.get_raw_data((w, h, d)))
+
+  ## Extract Points of interest
+  def extract_poi(self, 
+        obj_per_part = 5, 
+        poi_part_nx = 16, 
+        poi_part_ny = 16, 
+        threshold = 100,
+        min_weight = 5.0,
+        max_weight = 50.0):
+    w,h,d = self.get_shape()
+    poi_part_w = w / poi_part_nx
+    poi_part_h = h / poi_part_ny
+    poi_size = obj_per_part * poi_part_nx * poi_part_ny * 4 * np.dtype(np.float32).itemsize
+
+    img_buffer        = OffloadInputBuffer(self.raw_data)
+    object_buffer     = OffloadOutputBuffer(w * h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
+    barycenter_buffer = OffloadOutputBuffer(w * h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
+    poi_buffer        = OffloadOutputBuffer(poi_size, dtype = np.float32)
+    kernel_poi_detection = OffloadProcess.getOffloadProcess("kernel/poidetection.cl")
+
+    completeEvent = kernel_poi_detection.get_cl_prg().poidetection(
+      CLContext.get_queue(), 
+      (poi_part_nx, poi_part_ny), 
+      None, 
+      img_buffer.get_buffer(), 
+      object_buffer.get_buffer(), 
+      barycenter_buffer.get_buffer(), 
+      poi_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(poi_part_w), 
+      np.int32(poi_part_h), 
+      np.int32(threshold), 
+      np.int32(obj_per_part)
+    )
+    completeEvent.wait()
+
+    point_list = []
+
+    poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 4,))
+    for i in xrange(poi_part_nx * poi_part_ny * obj_per_part):
+      obj_x, obj_y, obj_w = poi_data[i * 4], poi_data[i * 4 + 1], poi_data[i * 4 + 2]
+      if obj_w >= min_weight and obj_w <= max_weight:
+        point_list.append((obj_x, obj_y, obj_w))
+    return point_list
+
+  def export(self, filename):
+    imageio.imsave(filename, self.raw_data.get_md_array())
+    
+
 
 input_path = sys.argv[1]
 
-image_raw = RawData.build_from_raw_file(input_path)
-img_downsize     = OffloadProcess.create_from_kernel_filename("kernel/downsize.cl")
-img_threshold    = OffloadProcess.create_from_kernel_filename("kernel/threshold.cl")
-img_poidetection = OffloadProcess.create_from_kernel_filename("kernel/poidetection.cl")
+input_img = ImageFrame.buildFromFile(input_path)
+downsized_img = input_img.resize(4, 4)
+downsized_img.export("downsize.png")
+threshold_img = downsized_img.threshold()
+threshold_img.export("threshold.png")
+poi_list = threshold_img.extract_poi()
 
-w,h,d = image_raw.get_shape()
-print("w={}, h={}, d={}\n".format(w, h, d))
-div_w = 4
-div_h = 4
-out_w = w / div_w
-out_h = h / div_h
-type_size = np.dtype(np.uint8).itemsize
-# rgb_lin = image_raw.get_lin_array()
-
-
-# rgb_b = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf = rgb_lin)
-image_buffer = OffloadInputBuffer(image_raw)
-
-tmp_buffer = OffloadOutputBuffer(out_w * out_h * d * type_size, flags = mf.READ_WRITE)
-
-out_buffer = OffloadOutputBuffer(out_w * out_h * d * type_size, flags = mf.READ_WRITE)
+print(poi_list)
 
 
 
-# res_g = cl.Buffer(ctx, mf.WRITE_ONLY, out_w * out_h * d * type_size)
-print("downsizing image")
-img_downsize.get_cl_prg().downsize(CLContext.get_queue(), (out_w, out_h), None, image_buffer.get_buffer(), tmp_buffer.get_buffer(), np.int32(w), np.int32(h), np.int32(div_w), np.int32(div_h))
-print("threshold simplification")
-img_threshold.get_cl_prg().threshold(CLContext.get_queue(), (out_w, out_h), None, tmp_buffer.get_buffer(), out_buffer.get_buffer(), np.int32(out_w), np.int32(out_h), np.int32(1), np.int32(1), np.int32(100))
-
-
-poi_part_nx = 16
-poi_part_ny = 16
-poi_part_w = out_w / poi_part_nx
-poi_part_h = out_h / poi_part_ny
-obj_per_part = 5
-poi_size = obj_per_part * poi_part_nx * poi_part_ny * 4 * np.dtype(np.float32).itemsize
-print("poi_size= {}".format(poi_size))
-
-object_buffer = OffloadOutputBuffer(out_w * out_h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
-barycenter_buffer = OffloadOutputBuffer(out_w * out_h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
-poi_buffer = OffloadOutputBuffer(poi_size, dtype = np.float32)
-
-print("point of interest detection")
-print("{} x {} -> {} x {}".format(out_w, out_h, poi_part_w, poi_part_h))
-completeEvent = img_poidetection.get_cl_prg().poidetection(
-  CLContext.get_queue(), 
-  (poi_part_nx, poi_part_ny), 
-  None, 
-  out_buffer.get_buffer(), 
-  object_buffer.get_buffer(), 
-  barycenter_buffer.get_buffer(), 
-  poi_buffer.get_buffer(), 
-  np.int32(out_w), 
-  np.int32(out_h), 
-  np.int32(poi_part_w), 
-  np.int32(poi_part_h), 
-  np.int32(200), 
-  np.int32(obj_per_part)
-)
-
-
-completeEvent.wait()
-
-print("post-processing")
-output_rawdata = out_buffer.get_raw_data((out_w, out_h, 3))
-print("final rendering")
-imageio.imsave("sample.png", output_rawdata.get_md_array())
-
-
-
-if 1:
-  # there are 3 float for each results data
-  poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 4,))
-  print("poi_data.shape {}".format(poi_data.md_array.shape))
-  for i in xrange(poi_part_nx * poi_part_ny * obj_per_part):
-    obj_x, obj_y, obj_w = poi_data[i * 4], poi_data[i * 4 + 1], poi_data[i * 4 + 2]
-    if obj_w > 1.0:
-      print("object at {},{} with weight {}".format(obj_x, obj_y, obj_w))
 
 
