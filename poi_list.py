@@ -12,7 +12,10 @@ print("list0: {}".format(len(poi_list)))
 print("list1: {}".format(len(poi_list2)))
 
 
-def distance(p0, p1, weight = (lambda v0, v1: math.exp(abs(v0[2] - v1[2])))):
+def exp_weight(v0, v1):
+  return math.exp(abs(v0[2] - v1[2]))
+
+def distance(p0, p1, weight = (lambda v0, v1: 1.0)):
   dx = (p0[0] - p1[0]) **2
   dy = (p0[1] - p1[1]) **2
   return math.sqrt(dx + dy) * weight(p0, p1)
@@ -24,7 +27,7 @@ def delete2Close(point_list, threshold = 5.0):
   for i in xrange(len(point_list)):
     add = True
     for j in xrange(len(point_list)):
-      if i != j and distance(point_list[i], point_list[j]) < threshold:
+      if i != j and distance(point_list[i], point_list[j], exp_weight) < threshold:
         add = False
         break
     if add: 
@@ -38,6 +41,102 @@ print("list0: {}, {}".format(len(list0), list0[-5:]))
 print("list1: {}, {}".format(len(list1), list1[-5:]))
 
 for a, b in zip(list0[-5:], list1[-5:]):
-  print distance(a, b, (lambda u,v: 1.0))
+  print distance(a, b)
 
+class Mat2x2:
+  def __init__(self, _00, _01, _10, _11):
+    self._00 = _00
+    self._01 = _01
+    self._10 = _10
+    self._11 = _11
 
+#list0 = list0[-10:]
+#list1 = list1[-10:]
+
+# compute the list of pairs of closest from 
+# list0 and list1
+def compute_pairs(list0, list1, threshold = 10.0):
+  result = []
+  valid_list1 = [i for i in xrange(len(list1))]
+  for p0 in list0:
+    ordered_list = [(i, distance(p0, list1[i])) for i in valid_list1]
+    ordered_list.sort(key = lambda v: v[1])
+    elected, d = ordered_list[0]
+    if d < threshold: result.append((p0, list1[elected]))
+    valid_list1.remove(elected)
+  return result
+
+for p0, p1 in compute_pairs(list0, list1):
+    print(distance(p0, p1))
+average = sum(distance(p0, p1) for p0, p1 in compute_pairs(list0, list1)) / len(list0)
+print("average: {}".format(average))
+
+class Transform:
+  def __init__(self, b, A, db, dA):
+    self.b = b
+    self.A = A
+    self.db = db
+    self.dA = dA
+
+  def apply(self, v):
+    return (self.b[0] + self.A[0][0] * v[0] + self.A[0][1] * v[1], 
+            self.b[1] + self.A[1][0] * v[0] + self.A[1][1] * v[1],
+            v[2])
+
+def icp_iteration(ref_list, moved_list, tfm):
+  closest_pairs = compute_pairs(ref_list, moved_list)
+
+  dG_dbx = sum((2  *  (p0[0] - p1[0])) for (p0, p1) in closest_pairs)
+  dG_dby = sum((2  *  (p0[1] - p1[1])) for (p0, p1) in closest_pairs)
+  dG_dA00 = sum(2  *  p0[0] * (p0[0] - p1[0]) for (p0, p1) in closest_pairs)
+  dG_dA01 = sum(2  *  p0[1] * (p0[0] - p1[0]) for (p0, p1) in closest_pairs)
+  dG_dA10 = sum(2  *  p0[0] * (p0[1] - p1[1]) for (p0, p1) in closest_pairs)
+  dG_dA11 = sum(2  *  p0[1] * (p0[1] - p1[1]) for (p0, p1) in closest_pairs)
+
+  # goal is to minimize G so to update in the direction
+  # it decreases <=> dG_dV is negative
+  dbx = tfm.db if dG_dbx > 0 else -tfm.db
+  dby = tfm.db if dG_dby > 0 else -tfm.db
+
+  dA00 = tfm.dA if dG_dA00 > 0 else -tfm.dA
+  dA01 = tfm.dA if dG_dA01 > 0 else -tfm.dA
+  dA10 = tfm.dA if dG_dA10 > 0 else -tfm.dA
+  dA11 = tfm.dA if dG_dA11 > 0 else -tfm.dA
+
+  tfm.b[0]    += dbx 
+  tfm.b[1]    += dby 
+  tfm.A[0][0] += dA00
+  tfm.A[0][1] += dA01
+  tfm.A[1][0] += dA10
+  tfm.A[1][1] += dA11
+  return tfm
+
+transform = Transform([0,-6],[[1,0], [0,1]], 0.1, 0.0)
+ref_list = list0
+src_list = list1
+
+iteration_scheme = [(0.1, 0.0, 1000), (0.001, 0.000, 1000)]
+
+for db, dA, num_iteration in iteration_scheme:
+  transform.db = db
+  transform.dA = dA
+
+  for i in xrange(num_iteration):
+    moved_list = [transform.apply(v) for v in src_list]
+    closest_pairs = compute_pairs(ref_list, moved_list)
+    #print("len(closest_pairs)={}".format(len(closest_pairs)))
+    #d_list = [distance(u,v) for u,v in closest_pairs]
+    #d_list.sort()
+    #G = sum(d_list)
+    #print d_list[:10]
+    #print("G={}\n".format(G))
+    transform = icp_iteration(ref_list, moved_list, transform)
+
+moved_list = [transform.apply(v) for v in src_list]
+average = sum(distance(p0, p1) for p0, p1 in compute_pairs(ref_list, moved_list)) / len(ref_list)
+closest_pairs =  compute_pairs(list0, moved_list)
+d_list = [distance(u,v) for u,v in closest_pairs]
+d_list.sort()
+print d_list[:10]
+print("average: {}".format(average))
+print("b=({},{}) A=(({},{}),({},{}))".format(transform.b[0], transform.b[1], transform.A[0][0], transform.A[0][1], transform.A[1][0], transform.A[1][1]))
