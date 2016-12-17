@@ -25,10 +25,10 @@
 float4 get_barycenter(float4 p0, float4 p1)
 {
   float4 v;
-  float w0 = p0.z, w1 = p1.z;
+  float w0 = fabs(p0.z), w1 = fabs(p1.z);
   v.x = (w0 * p0.x + w1 * p1.x) / (w0 + w1);
   v.y = (w0 * p0.y + w1 * p1.y) / (w0 + w1);
-  v.z = w0 + w1;
+  v.z = p0.z + p1.z;
 
   return v;
 }
@@ -73,6 +73,7 @@ __kernel void poidetection(
   for (y = start_y; y < start_y + sub_h; ++y)
   {
     short2 start_tag = (short2)(-1, -1);
+    float weight = 0.0f;
     for (x = start_x; x < start_x + sub_w; ++x)
     {
       unsigned char red   = img[x * dim_x + y * dim_y + 0]; 
@@ -85,10 +86,15 @@ __kernel void poidetection(
           // starting a new object
           start_tag = (short2) (x, y);
           barycenter[start_tag.x * h + y].y = y;
+          weight = 0.0f;
         } 
         object[x * h + y] = start_tag;
         barycenter[start_tag.x * h + y].x = (x + start_tag.x) * 0.5;
-        barycenter[start_tag.x * h + y].z = x - start_tag.x + 1.0;
+        weight += 1.0f;
+        // offset for cells touching the boundaries
+        if (x == start_x + sub_w - 1 || y == start_y + sub_h - 1 || x == start_x || y == start_y)
+          weight -= w * h;
+        barycenter[start_tag.x * h + y].z = weight; // x - start_tag.x + 1.0;
       } else {
         start_tag = (short2) (-1, -1);
         object[x * h + y] = start_tag;
@@ -142,7 +148,7 @@ __kernel void poidetection(
     for (int oy = start_y; oy < start_y + sub_h && oid < obj_per_partition; ++oy)
     {
       short2 pixel_obj = get_pixel_object(object, ox, oy, h);
-      if (pixel_obj.x == ox && pixel_obj.y == oy) {
+      if (pixel_obj.x == ox && pixel_obj.y == oy && barycenter[ox * h + oy].z >= 0.0f) {
         results[pid + oid] = barycenter[ox * h + oy];
         oid++;
         short bx = barycenter[ox * h + oy].x;

@@ -78,13 +78,23 @@ class OffloadBuffer(object):
 
 
 class OffloadInputBuffer(OffloadBuffer):
-  def __init__(self, raw_data):
+  def __init__(self, raw_data, flags = mf.READ_ONLY):
     cl_ctx, cl_queue = CLContext.get_context_queue()
     dtype = raw_data.get_dtype()
     lin_data = raw_data.get_lin_array()
     nbytes = lin_data.shape[0] * np.dtype(dtype).itemsize
-    buffer = cl.Buffer(cl_ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf = lin_data)
+    buffer = cl.Buffer(cl_ctx, flags | mf.COPY_HOST_PTR, hostbuf = lin_data)
     OffloadBuffer.__init__(self, buffer, nbytes, dtype)
+
+class OffloadInputOutputBuffer(OffloadInputBuffer):
+  def __init__(self, raw_data, flags = mf.READ_WRITE):
+    OffloadInputBuffer.__init__(self, raw_data, flags)
+
+  def get_raw_data(self, shape):
+    array = np.empty(self.nbytes / np.dtype(self.dtype).itemsize, dtype = self.dtype)
+    cl.enqueue_copy(self.cl_queue, array, self.buffer)
+    return RawData(array.reshape(shape).astype(self.dtype), dtype = self.dtype)
+
 
 class OffloadOutputBuffer(OffloadBuffer):
   def __init__(self, nbytes, dtype = np.uint8, flags = mf.WRITE_ONLY):
@@ -195,7 +205,7 @@ class ImageFrame:
     poi_part_h = h / poi_part_ny
     poi_size = obj_per_part * poi_part_nx * poi_part_ny * 4 * np.dtype(np.float32).itemsize
 
-    img_buffer        = OffloadInputBuffer(self.raw_data)
+    img_buffer        = OffloadInputOutputBuffer(self.raw_data)
     object_buffer     = OffloadOutputBuffer(w * h * np.dtype(np.int16).itemsize * 2, flags = mf.READ_WRITE, dtype = np.int16)
     barycenter_buffer = OffloadOutputBuffer(w * h * np.dtype(np.float32).itemsize * 4, dtype = np.float32, flags = mf.READ_WRITE)
     poi_buffer        = OffloadOutputBuffer(poi_size, dtype = np.float32)
@@ -225,7 +235,7 @@ class ImageFrame:
       obj_x, obj_y, obj_w = poi_data[i * 4], poi_data[i * 4 + 1], poi_data[i * 4 + 2]
       if obj_w >= min_weight and obj_w <= max_weight:
         point_list.append((obj_x, obj_y, obj_w))
-    return point_list
+    return ImageFrame(img_buffer.get_raw_data((w, h, d))), point_list
 
   def export(self, filename):
     imageio.imsave(filename, self.raw_data.get_md_array())
@@ -239,7 +249,8 @@ downsized_img = input_img.resize(4, 4)
 downsized_img.export("downsize.png")
 threshold_img = downsized_img.threshold()
 threshold_img.export("threshold.png")
-poi_list = threshold_img.extract_poi()
+poi_img, poi_list = threshold_img.extract_poi()
+poi_img.export("poi2.png")
 
 print(poi_list)
 
