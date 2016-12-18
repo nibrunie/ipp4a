@@ -228,6 +228,41 @@ class ImageFrame:
     )
     completeEvent.wait()
 
+    completeEvent = kernel_poi_detection.get_cl_prg().poiunification(
+      CLContext.get_queue(), 
+      (1, 1), 
+      None, 
+      img_buffer.get_buffer(), 
+      object_buffer.get_buffer(), 
+      barycenter_buffer.get_buffer(), 
+      poi_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(poi_part_w), 
+      np.int32(poi_part_h), 
+      np.int32(threshold), 
+      np.int32(obj_per_part)
+    )
+    completeEvent.wait()
+
+    completeEvent = kernel_poi_detection.get_cl_prg().poiextraction(
+      CLContext.get_queue(), 
+      (poi_part_nx, poi_part_ny), 
+      None, 
+      img_buffer.get_buffer(), 
+      object_buffer.get_buffer(), 
+      barycenter_buffer.get_buffer(), 
+      poi_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(poi_part_w), 
+      np.int32(poi_part_h), 
+      np.int32(threshold), 
+      np.int32(obj_per_part)
+    )
+    completeEvent.wait()
+
+
     point_list = []
 
     poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 4,))

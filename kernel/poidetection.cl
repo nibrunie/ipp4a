@@ -61,11 +61,11 @@ __kernel void poidetection(
   const int depth = 3;
   int work_id_x = get_global_id(0);
   int work_id_y = get_global_id(1);
-  int start_x = work_id_x * sub_w;
-  int start_y = work_id_y * sub_h;
-
   const int dim_x = depth * h;
   const int dim_y = depth;
+
+  int start_x = work_id_x * sub_w;
+  int start_y = work_id_y * sub_h;
   
   int x, y;
 
@@ -92,8 +92,8 @@ __kernel void poidetection(
         barycenter[start_tag.x * h + y].x = (x + start_tag.x) * 0.5;
         weight += 1.0f;
         // offset for cells touching the boundaries
-        if (x == start_x + sub_w - 1 || y == start_y + sub_h - 1 || x == start_x || y == start_y)
-          weight -= w * h;
+        //if (x == start_x + sub_w - 1 || y == start_y + sub_h - 1 || x == start_x || y == start_y)
+         // weight -= w * h;
         barycenter[start_tag.x * h + y].z = weight; // x - start_tag.x + 1.0;
       } else {
         start_tag = (short2) (-1, -1);
@@ -134,7 +134,111 @@ __kernel void poidetection(
     }
   }
 
+}
 
+__kernel void poiunification(
+  __global unsigned char* img, 
+  __global short2* object, 
+  __global float4* barycenter, 
+  __global float4* results, 
+  const int w, const int h, 
+  const int sub_w, const int sub_h, 
+  const int threshold, const int obj_per_partition)
+{
+  const int depth = 3;
+  int work_id_x = get_global_id(0);
+  int work_id_y = get_global_id(1);
+
+  const int dim_x = depth * h;
+  const int dim_y = depth;
+  
+
+  /** processing each column separating partitions
+   *  from poidetection kernel execution */
+  for (int x = sub_w-1; x < w; x += sub_w)
+  {
+    for (int y = 0; y < h; ++y)
+    {
+      // pixel (x, y)
+      unsigned char red0   = img[x * dim_x + y * dim_y + 0]; 
+      unsigned char green0 = img[x * dim_x + y * dim_y + 1]; 
+      unsigned char blue0  = img[x * dim_x + y * dim_y + 2]; 
+      // pixel (x+1, y)
+      unsigned char red1   = img[(x + 1) * dim_x + y * dim_y + 0]; 
+      unsigned char green1 = img[(x + 1) * dim_x + y * dim_y + 1]; 
+      unsigned char blue1  = img[(x + 1) * dim_x + y * dim_y + 2]; 
+
+      if ((red0 >= threshold || green0 >= threshold || blue0 >= threshold) &&
+          (red1 >= threshold || green1 >= threshold || blue1 >= threshold))
+      {
+        short2 obj0 = get_pixel_object(object, x, y, h);
+        short2 obj1 = get_pixel_object(object, x + 1, y, h);
+        if (obj0.x != obj1.x || obj0.y != obj1.y) {
+          float4 new_barycenter = get_barycenter(
+            barycenter[obj0.x * h + obj0.y],
+            barycenter[obj1.x * h + obj1.y]
+          );
+          set_pixel_object(object, obj1.x, obj1.y, h, obj0);
+          barycenter[obj0.x * h + obj0.y] = new_barycenter;
+        }
+      }
+    }
+  }
+
+
+  /** processing each lines separating partitions
+   *  from poidetection kernel execution */
+  for (int y = sub_h-1; y < h; y += sub_h)
+  {
+    for (int x = 0; x < w; ++x)
+    {
+      // pixel (x, y)
+      unsigned char red0   = img[x * dim_x + y * dim_y + 0]; 
+      unsigned char green0 = img[x * dim_x + y * dim_y + 1]; 
+      unsigned char blue0  = img[x * dim_x + y * dim_y + 2]; 
+      // pixel (x+1, y)
+      unsigned char red1   = img[x * dim_x + (y + 1) * dim_y + 0]; 
+      unsigned char green1 = img[x * dim_x + (y + 1) * dim_y + 1]; 
+      unsigned char blue1  = img[x * dim_x + (y + 1) * dim_y + 2]; 
+
+      if ((red0 >= threshold || green0 >= threshold || blue0 >= threshold) &&
+          (red1 >= threshold || green1 >= threshold || blue1 >= threshold))
+      {
+        short2 obj0 = get_pixel_object(object, x, y, h);
+        short2 obj1 = get_pixel_object(object, x, y+1, h);
+        if (obj0.x != obj1.x || obj0.y != obj1.y) {
+          float4 new_barycenter = get_barycenter(
+            barycenter[obj0.x * h + obj0.y],
+            barycenter[obj1.x * h + obj1.y]
+          );
+          set_pixel_object(object, obj1.x, obj1.y, h, obj0);
+          barycenter[obj0.x * h + obj0.y] = new_barycenter;
+        }
+      }
+    }
+  }
+
+}
+
+
+__kernel void poiextraction(
+  __global unsigned char* img, 
+  __global short2* object, 
+  __global float4* barycenter, 
+  __global float4* results, 
+  const int w, const int h, 
+  const int sub_w, const int sub_h, 
+  const int threshold, const int obj_per_partition)
+{
+  const int depth = 3;
+  int work_id_x = get_global_id(0);
+  int work_id_y = get_global_id(1);
+  const int dim_x = depth * h;
+  const int dim_y = depth;
+
+  int start_x = work_id_x * sub_w;
+  int start_y = work_id_y * sub_h;
+  
 
   /** partition start index*/
   int pid = (work_id_x * get_global_size(1) + work_id_y) * obj_per_partition;
@@ -148,17 +252,20 @@ __kernel void poidetection(
     for (int oy = start_y; oy < start_y + sub_h && oid < obj_per_partition; ++oy)
     {
       short2 pixel_obj = get_pixel_object(object, ox, oy, h);
-      if (pixel_obj.x == ox && pixel_obj.y == oy && barycenter[ox * h + oy].z >= 0.0f) {
+      if (pixel_obj.x == ox && pixel_obj.y == oy && barycenter[ox * h + oy].z >= 50.0f) {
         results[pid + oid] = barycenter[ox * h + oy];
         oid++;
         short bx = barycenter[ox * h + oy].x;
         short by = barycenter[ox * h + oy].y;
-        for (int i = bx - 10; i < bx + 10; ++i) { 
-          img[i *dim_x + by * dim_y + 2] = 255;
+        float weight =  barycenter[ox * h + oy].z;
+        uchar weight_color = 255;// (uchar) min(max(weight,100.0f), 255.0f);
+        int star_size = 20;
+        for (int i = bx - star_size; i < bx + star_size; ++i) { 
+          img[i *dim_x + by * dim_y + 2] = 0;
           img[i *dim_x + by * dim_y + 0] = 0;
-          img[i *dim_x + by * dim_y + 1] = 0;
+          img[i *dim_x + by * dim_y + 1] = weight_color;
         }
-        for (int j = by - 10; j < by + 10; ++j) {
+        for (int j = by - star_size; j < by + star_size; ++j) {
           img[bx *dim_x + j * dim_y + 2] = 255;
           img[bx *dim_x + j * dim_y + 0] = 0;
           img[bx *dim_x + j * dim_y + 1] = 0;
