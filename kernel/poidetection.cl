@@ -252,26 +252,47 @@ __kernel void poiextraction(
     for (int oy = start_y; oy < start_y + sub_h && oid < obj_per_partition; ++oy)
     {
       short2 pixel_obj = get_pixel_object(object, ox, oy, h);
-      if (pixel_obj.x == ox && pixel_obj.y == oy && barycenter[ox * h + oy].z >= 50.0f) {
+      if (pixel_obj.x == ox && pixel_obj.y == oy && barycenter[ox * h + oy].z >= 0.0f) {
         results[pid + oid] = barycenter[ox * h + oy];
         oid++;
-        short bx = barycenter[ox * h + oy].x;
-        short by = barycenter[ox * h + oy].y;
-        float weight =  barycenter[ox * h + oy].z;
-        uchar weight_color = 255;// (uchar) min(max(weight,100.0f), 255.0f);
-        int star_size = 20;
-        for (int i = bx - star_size; i < bx + star_size; ++i) { 
-          img[i *dim_x + by * dim_y + 2] = 0;
-          img[i *dim_x + by * dim_y + 0] = 0;
-          img[i *dim_x + by * dim_y + 1] = weight_color;
-        }
-        for (int j = by - star_size; j < by + star_size; ++j) {
-          img[bx *dim_x + j * dim_y + 2] = 255;
-          img[bx *dim_x + j * dim_y + 0] = 0;
-          img[bx *dim_x + j * dim_y + 1] = 0;
-        }
       }
     }
   }
 
+}
+
+
+__kernel void poisuperposition(
+  __global unsigned char* img, 
+  __global float4* results, 
+  const int w, const int h, 
+  const int result_num)
+{
+  const int depth = 3;
+  int work_id_x = get_global_id(0);
+  int work_id_y = get_global_id(1);
+  const int dim_x = depth * h;
+  const int dim_y = depth;
+
+  /** object id */
+  for (int oid = 0; oid < result_num; ++oid)
+  {
+    float4 barycenter = results[oid];
+    short bx = barycenter.x;
+    short by = barycenter.y;
+    float weight =  barycenter.z;
+    uchar weight_color = 255;// (uchar) min(max(weight,100.0f), 255.0f);
+    int star_size = 20;
+    for (int i = bx - star_size; i < bx + star_size; ++i) { 
+      img[i *dim_x + by * dim_y + 2] = 0;
+      img[i *dim_x + by * dim_y + 0] = 0;
+      img[i *dim_x + by * dim_y + 1] = weight_color;
+    }
+    for (int j = by - star_size; j < by + star_size; ++j) {
+      img[bx *dim_x + j * dim_y + 2] = 255;
+      img[bx *dim_x + j * dim_y + 0] = 0;
+      img[bx *dim_x + j * dim_y + 1] = 0;
+    }
+
+  }
 }

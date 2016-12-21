@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Image Frame module for Image Pipeline Processing 4 Astronomy
+# Copyrights Nicolas Brunie (2016-), nibrunie@gmail.com
+# https://github.com/nibrunie/ipp4a
 
 from __future__ import absolute_import, print_function
 import numpy as np
@@ -44,8 +47,8 @@ class RawData(object):
     return self.dtype
 
   def get_lin_array(self):
-    w, h, d = self.get_shape()
-    return self.md_array.reshape(w*h*d).astype(self.dtype)
+    lin_size = reduce(lambda x,y: (x*y), self.get_shape(), 1)
+    return self.md_array.reshape(lin_size).astype(self.dtype)
 
   def get_md_array(self):
     return self.md_array
@@ -262,32 +265,98 @@ class ImageFrame:
     )
     completeEvent.wait()
 
-
     point_list = []
 
     poi_data = poi_buffer.get_raw_data((poi_part_nx * poi_part_ny * obj_per_part * 4,))
     for i in xrange(poi_part_nx * poi_part_ny * obj_per_part):
       obj_x, obj_y, obj_w = poi_data[i * 4], poi_data[i * 4 + 1], poi_data[i * 4 + 2]
       if obj_w >= min_weight and obj_w <= max_weight:
-        point_list.append((obj_x, obj_y, obj_w))
-    return ImageFrame(img_buffer.get_raw_data((w, h, d))), point_list
+        point_list.append((obj_x, obj_y, obj_w, 0.0))
+    return point_list
+
+  def poisuperposition(self, poi_list):
+    w,h,d = self.get_shape()
+
+    num_obj = len(poi_list)
+    poi_array = np.array(poi_list).astype(np.float32).reshape((num_obj * 4,))
+
+    poi_data = RawData(poi_array, dtype = np.float32)
+
+    img_buffer        = OffloadInputOutputBuffer(self.raw_data)
+    poi_buffer        = OffloadInputBuffer(poi_data)
+    kernel_poi_detection = OffloadProcess.getOffloadProcess("kernel/poidetection.cl")
+
+    completeEvent = kernel_poi_detection.get_cl_prg().poisuperposition(
+      CLContext.get_queue(), 
+      (1, 1), 
+      None, 
+      img_buffer.get_buffer(), 
+      poi_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(num_obj)
+    )
+    completeEvent.wait()
+    return ImageFrame(img_buffer.get_raw_data((w, h, d)))
+
+  ## Combine @p self ImageFormat with @p source
+  # ImageFormat object using
+  # dest = c0 x self + c1 x source
+  def combine(self, source, c0, c1):
+    w, h, d = self.get_shape()
+    out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img0_buffer = OffloadInputBuffer(self.raw_data)
+    img1_buffer = OffloadInputBuffer(source.raw_data)
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_combine = OffloadProcess.getOffloadProcess("kernel/combine.cl")
+
+    kernel_combine.get_cl_prg().combine(
+      CLContext.get_queue(), 
+      (w, h), 
+      None, 
+      img0_buffer.get_buffer(), 
+      img1_buffer.get_buffer(), 
+      out_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(1), 
+      np.int32(1), 
+      np.float32(c0),
+      np.float32(c1)
+    )
+    return ImageFrame(out_buffer.get_raw_data((w, h, d)))
+
+  ## move @p self ImageFormat according to
+  #  @p dx, @p dy move vector
+  def move(self, dx, dy):
+    w, h, d = self.get_shape()
+    out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img_buffer = OffloadInputBuffer(self.raw_data)
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_combine = OffloadProcess.getOffloadProcess("kernel/combine.cl")
+
+    kernel_combine.get_cl_prg().move(
+      CLContext.get_queue(), 
+      (w, h), 
+      None, 
+      img_buffer.get_buffer(), 
+      out_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(1), 
+      np.int32(1), 
+      np.float32(dx),
+      np.float32(dy)
+    )
+    return ImageFrame(out_buffer.get_raw_data((w, h, d)))
 
   def export(self, filename):
     imageio.imsave(filename, self.raw_data.get_md_array())
     
 
 
-input_path = sys.argv[1]
-
-input_img = ImageFrame.buildFromFile(input_path)
-downsized_img = input_img.resize(4, 4)
-downsized_img.export("downsize.png")
-threshold_img = downsized_img.threshold()
-threshold_img.export("threshold.png")
-poi_img, poi_list = threshold_img.extract_poi()
-poi_img.export("poi2.png")
-
-print(poi_list)
 
 
 
