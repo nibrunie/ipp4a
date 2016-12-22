@@ -362,6 +362,65 @@ class ImageFrame:
     )
     return ImageFrame(out_buffer.get_raw_data((w, h, d)))
 
+  def rotatePiOver2(self, m = 1):
+    return ImageFrame(RawData(np.rot90(self.get_raw_data().get_md_array(), m)))
+
+  ## Compute the maximum between @p self image and 
+  #  @p dark_img
+  #  @return an ImageFrame containing the dark interpolation of both inputs
+  def update_dark(self, dark_img):
+    new_array = np.maximum(self.get_raw_data().get_md_array(), dark_img.get_raw_data().get_md_array())
+    return ImageFrame(RawData(new_array))
+
+  ## Delete the dark portion of @p self which is 
+  #  described by @p dark_img
+  #  @return clean version of self
+  def clean_dark(self, dark_img, dark_threshold = 50.0):
+    w, h, d = self.get_shape()
+    out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img_buffer = OffloadInputBuffer(self.get_raw_data())
+    dark_buffer = OffloadInputBuffer(dark_img.get_raw_data())
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_dark = OffloadProcess.getOffloadProcess("kernel/dark.cl")
+
+    kernel_dark.get_cl_prg().clean_dark(
+      CLContext.get_queue(), 
+      (w, h), 
+      None, 
+      img_buffer.get_buffer(), 
+      dark_buffer.get_buffer(),
+      out_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(1), 
+      np.int32(1),
+      np.float32(dark_threshold)
+    )
+    return ImageFrame(out_buffer.get_raw_data((w, h, d)))
+
+  def subtract_threshold(self, dark_threshold):
+    w, h, d = self.get_shape()
+    out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
+
+    img_buffer = OffloadInputBuffer(self.get_raw_data())
+    out_buffer = OffloadOutputBuffer(out_buffer_size)
+    kernel_dark = OffloadProcess.getOffloadProcess("kernel/dark.cl")
+
+    kernel_dark.get_cl_prg().subtract_threshold(
+      CLContext.get_queue(), 
+      (w, h), 
+      None, 
+      img_buffer.get_buffer(), 
+      np.float32(dark_threshold),
+      out_buffer.get_buffer(), 
+      np.int32(w), 
+      np.int32(h), 
+      np.int32(1), 
+      np.int32(1)
+    )
+    return ImageFrame(out_buffer.get_raw_data((w, h, d)))
+
   def export(self, filename):
     imageio.imsave(filename, self.raw_data.get_md_array())
     
