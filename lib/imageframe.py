@@ -113,11 +113,18 @@ class OffloadOutputBuffer(OffloadBuffer):
 
 class OffloadProcess(object):
   kernel_map = {}
+  default_kernels = ["kernel/combine.cl", "kernel/dark.cl", "kernel/downsize.cl", "kernel/poidetection.cl", "kernel/threshold.cl"]
   @staticmethod
   def getOffloadProcess(filename):
     if not filename in OffloadProcess.kernel_map:
       OffloadProcess.kernel_map[filename] = OffloadProcess.create_from_kernel_filename(filename)
     return OffloadProcess.kernel_map[filename]
+
+  @staticmethod
+  def preLoadKernels():
+    klist = OffloadProcess.default_kernels
+    for kernel_path in klist:
+      OffloadProcess.getOffloadProcess(kernel_path)
 
   def __init__(self, cl_prg):
     cl_ctx, cl_queue = CLContext.get_context_queue()
