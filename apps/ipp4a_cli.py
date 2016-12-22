@@ -50,7 +50,7 @@ for new_frame in frame_list:
 
 print("finding best matching transform between two frames")
 transform = Transform([0,0], [[1, 0], [0, 1]], 0.01, 0.01)
-iteration_scheme = [(0.1, 0.0, 10), (0.001, 0.00, 10)] 
+iteration_scheme = [(10.0, 0, 100), (1.0, 0.0, 100), (0.1, 0.0, 100), (0.001, 0.00, 100)] 
 
 ref_list = frame_list[0].reduced_list
 src_list = frame_list[1].reduced_list
@@ -74,7 +74,11 @@ print distance_list
 average = sum(distance_list) / len(distance_list)
 print("average distance is {}".format(average))
 
-main_frame   = frame_list[0]
-second_frame = frame_list[1]
-combined_img = main_frame.input_img.combine(second_frame.input_img, 0.5, 0.5)
+ref_frame   = frame_list[0].input_img
+src_frame = frame_list[1].input_img
+src_frame = src_frame.move(4 * new_transform.b[0], 4 * new_transform.b[1])
+combined_img = ref_frame.combine(src_frame, 0.5, 0.5)
 combined_img.export("combined.png")
+
+#print("moving frame")
+#main_frame.input_img.move(100.3, 37.17).export("moved.png")
