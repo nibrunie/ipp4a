@@ -400,7 +400,7 @@ class ImageFrame:
     )
     return ImageFrame(out_buffer.get_raw_data((w, h, d)))
 
-  def subtract_threshold(self, dark_threshold):
+  def subtract_threshold(self, threshold_red, threshold_green, threshold_blue):
     w, h, d = self.get_shape()
     out_buffer_size = w * h * d * np.dtype(self.raw_data.dtype).itemsize 
 
@@ -413,7 +413,9 @@ class ImageFrame:
       (w, h), 
       None, 
       img_buffer.get_buffer(), 
-      np.float32(dark_threshold),
+      np.float32(threshold_red),
+      np.float32(threshold_green),
+      np.float32(threshold_blue),
       out_buffer.get_buffer(), 
       np.int32(w), 
       np.int32(h), 
@@ -421,6 +423,9 @@ class ImageFrame:
       np.int32(1)
     )
     return ImageFrame(out_buffer.get_raw_data((w, h, d)))
+
+  def average_per_channel(self):
+    return np.average(np.average(self.get_raw_data().get_md_array(), axis = 0), axis = 0)
 
   def export(self, filename):
     imageio.imsave(filename, self.raw_data.get_md_array())

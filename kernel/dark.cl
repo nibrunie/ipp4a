@@ -57,7 +57,9 @@ __kernel void clean_dark(
 
 __kernel void subtract_threshold(
   __global const unsigned char* img, 
-  const float dark_threshold,
+  const float threshold_red,
+  const float threshold_green,
+  const float threshold_blue,
   __global unsigned char* out, 
   const int w, 
   const int h, 
@@ -74,7 +76,7 @@ __kernel void subtract_threshold(
   int start_x = gid_x * sub_w;
   int start_y = gid_y * sub_h;
   int x,y;
-  uchar3 dark_color = convert_uchar3_sat((float3) (dark_threshold));
+  uchar3 dark_color = convert_uchar3_sat((float3) (threshold_red, threshold_green, threshold_blue));
 
   for (x = start_x; x < start_x + sub_w; ++x)
     for (y = start_y; y < start_y + sub_h; ++y) { 
