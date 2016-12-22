@@ -41,13 +41,12 @@ __kernel void combine(
 
 uchar3 get_color(__global const unsigned char* img, int w, int h, int depth, int x, int y)
 {
-  const int depth = 3;
   const int dim_x = depth * h, dim_y = depth;
   uchar3 result;
-  if (x < 0 || x >= w || y < 0 || y >= h ) return (uchar3)(0)
-  result.x = img0[x * dim_x + y * dim_y + 0];
-  result.y = img0[x * dim_x + y * dim_y + 1];
-  result.z = img0[x * dim_x + y * dim_y + 2];
+  if (x < 0 || x >= w || y < 0 || y >= h ) return (uchar3)(0);
+  result.x = img[x * dim_x + y * dim_y + 0];
+  result.y = img[x * dim_x + y * dim_y + 1];
+  result.z = img[x * dim_x + y * dim_y + 2];
   return result;
 }
 
@@ -84,13 +83,14 @@ __kernel void move(
       uchar3 red10 = get_color(img, w, h, depth, x - ix, y - iy + 1); 
       uchar3 red11 = get_color(img, w, h, depth, x - ix + 1, y - iy + 1); 
 
-      float3 color = (fx * fy) * (float3) red00 
-          + (1-fx) * fy * (float3) red01
-          + fx * (1 - fy) * (float3) red10
-          + (1 - fx) * (1 - fy) * (float3) red11;
+      float3 color = (fx * fy) * convert_float3(red00) 
+          + (1-fx) * fy * convert_float3(red01)
+          + fx * (1 - fy) * convert_float3(red10)
+          + (1 - fx) * (1 - fy) * convert_float3(red11);
 
-      out[x * dim_x + y * dim_y + 0] = color.x;
-      out[x * dim_x + y * dim_y + 1] = color.y;
-      out[x * dim_x + y * dim_y + 2] = color.z;
+      uchar3 ucolor = convert_uchar3_sat(color);
+      out[x * dim_x + y * dim_y + 0] = ucolor.x;
+      out[x * dim_x + y * dim_y + 1] = ucolor.y;
+      out[x * dim_x + y * dim_y + 2] = ucolor.z;
   }
 }
