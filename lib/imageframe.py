@@ -153,6 +153,9 @@ class ImageFrame:
   def get_shape(self):
     return self.raw_data.get_shape()
 
+  def get_raw_data(self):
+    return self.raw_data
+
   @staticmethod
   def buildFromFile(filename):
     return ImageFrame(RawData.build_from_raw_file(filename))
