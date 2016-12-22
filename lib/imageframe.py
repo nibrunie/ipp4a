@@ -143,6 +143,7 @@ class OffloadProcess(object):
 
   @staticmethod
   def create_from_kernel_filename(kernel_filename):
+    print("creating kernel from {}".format(kernel_filename))
     kernel_src = open(kernel_filename, "r").read()
     return OffloadProcess.create_from_kernel_src(kernel_src)
 
